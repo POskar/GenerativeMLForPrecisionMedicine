@@ -1,8 +1,53 @@
-# ACIT5900 - Short Master's Thesis
-The accuracy of machine learning models used in clinical decision making has a direct impact on a patient's chances of recovery. Missing data pose a challenge and generative models can assist overcome it.
+# Generative Machine Learning for Precision Medicine
 
-Clinical decision support systems have the potential to create tangible improvements in the chances of recovery and quality of life of the patients. They can also contribute to save lives. To achieve this goal, improving the precision of machine learning models for outcome prediction is crucial. Ideally, models perform best when all information about a patient is available, but in real-world cases (especially in highly-time constrained cases such as acute stroke) they must operate with limited data. In this project, we will explore the use of variational autoencoders to accurately model the dependencies in a clinical dataset, evaluate their benefit on the precision of the predictions, and ultimately their potential to maximize the quality of life of patients.
+## Project Description
 
-## Goal
-1. Design and implement methods for patient outcome prediction using generative models in combination with multiclass classifiers
-2. Evaluate the influence of the fidelity of the generative model on the final system's accuracy
+### Introduction
+
+Predicting patient outcomes is crucial in clinical decision-making, particularly in time-sensitive scenarios like acute stroke. This Master's thesis project focuses on enhancing the accuracy of clinical decision-support systems (CDSS) through the use of generative machine learning (ML) models, specifically variational autoencoders (VAEs) and generative adversarial imputation networks (GAINs).
+
+### Project Objectives
+
+1. **Design and Implementation of Generative Models:**
+    - Explore VAEs in combination with multiclass classifiers for patient outcome prediction.
+    - Optionally explore GAINs for the same purpose.
+    - Implement methods to incorporate generative models into a prognostic tool that is robust to incomplete inputs.
+
+2. **Evaluation of Generative Model Fidelity:**
+    - Measure imputation quality on a simulated dataset with artificially removed data items.
+    - Evaluate metrics expressing uncertainty in imputed values.
+    - Investigate the impact of generative model fidelity on the accuracy of the overall prognostic pipeline.
+    - Assess trade-offs between model fidelity and computational efficiency in real-time clinical settings.
+
+### Data Sources
+
+Utilize patient information datasets like AmsterdamUMCdb, HIRID, eICU, MIMIC, and acute stroke data from the annotated MRI dataset in Baltimore.
+
+### Methodology
+
+1. Develop a generative model based on either "Variational Autoencoder with Arbitrary Conditioning" or "Generative Adversarial Imputation Network (GAIN)" to impute missing entries in patient data.
+   
+2. Integrate imputed data into a predictive model to enhance prognosis accuracy with incomplete inputs.
+   
+3. Determine the best procedure to calibrate the resulting predictive model.
+
+### Expected Outcomes
+
+- Improved precision in patient outcome predictions through a generative model-based pipeline.
+- A notion of uncertainty due to missing data.
+- Insights into the influence of generative model fidelity on clinical decision support system accuracy.
+- Validation of VAEs' potential in addressing missing data challenges in clinical datasets.
+
+### Significance of the Project
+
+- Creation of a prognostic ML-based tool for CDSS with potential extended functionalities.
+- Enhanced clinical decision-making for better patient outcomes and improved quality of life.
+- Contribution to robust methods for handling missing data in high-stakes healthcare scenarios.
+- Practical application insights of generative models in precision medicine.
+
+---
+
+**References:**
+- [Variational Autoencoder with Arbitrary Conditioning](https://doi.org/10.48550/arXiv.1806.02382)
+- [GAIN: Missing Data Imputation Using Generative Adversarial Nets](https://doi.org/10.48550/arXiv.1806.02920)
+- [Annotated Clinical MRIs and Linked Metadata of Patients with Acute Stroke](https://doi.org/10.3886/ICPSR38464.v5)
