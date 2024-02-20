@@ -1,0 +1,634 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>parmap.parmap &#8212; parmap 1.6.0 documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/alabaster.css" />
+    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
+    <script src="../../_static/jquery.js"></script>
+    <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for parmap.parmap</h1><div class="highlight"><pre>
+<span></span><span class="ch">#!/usr/bin/env python</span>
+<span class="c1">#   Copyright 2014-2022 Sergio Oller &lt;sergioller@gmail.com&gt;</span>
+<span class="c1">#</span>
+<span class="c1">#   Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
+<span class="c1">#   you may not use this file except in compliance with the License.</span>
+<span class="c1">#   You may obtain a copy of the License at</span>
+<span class="c1">#</span>
+<span class="c1">#       http://www.apache.org/licenses/LICENSE-2.0</span>
+<span class="c1">#</span>
+<span class="c1">#   Unless required by applicable law or agreed to in writing, software</span>
+<span class="c1">#   distributed under the License is distributed on an &quot;AS IS&quot; BASIS,</span>
+<span class="c1">#   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</span>
+<span class="c1">#   See the License for the specific language governing permissions and</span>
+<span class="c1">#   limitations under the License.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">This module implements map and starmap functions (see python standard</span>
+<span class="sd">library to learn about them).</span>
+
+<span class="sd">The implementations provided in this module allow providing additional</span>
+<span class="sd">arguments to the mapped functions. Additionally they will initialize</span>
+<span class="sd">the pool and close it automatically by default if possible.</span>
+
+<span class="sd">The easiest way to learn is by reading the following examples.</span>
+
+<span class="sd">===========</span>
+<span class="sd">Examples</span>
+<span class="sd">===========</span>
+
+<span class="sd">Map example</span>
+<span class="sd">===========</span>
+<span class="sd">You want to do:</span>
+<span class="sd">    &gt;&gt;&gt; y1 = [myfunction(x, argument1, argument2) for x in mylist]</span>
+<span class="sd">In parallel:</span>
+<span class="sd">    &gt;&gt;&gt; y2 = parmap.map(myfunction, mylist, argument1, argument2)</span>
+<span class="sd">Check both results:</span>
+<span class="sd">    &gt;&gt;&gt; assert y1 == y2</span>
+
+<span class="sd">Starmap example</span>
+<span class="sd">================</span>
+
+<span class="sd">You want to do:</span>
+<span class="sd">    &gt;&gt;&gt; z1 = [myfunction(x, y, argument1, argument2) for (x,y) in mylist]</span>
+<span class="sd">In parallel:</span>
+<span class="sd">    &gt;&gt;&gt; z2 = parmap.starmap(myfunction, mylist, argument1, argument2)</span>
+<span class="sd">Check both results:</span>
+<span class="sd">    &gt;&gt;&gt; assert z1 == z2</span>
+
+
+<span class="sd">You want to do:</span>
+<span class="sd">    &gt;&gt;&gt; listx = [1, 2, 3, 4, 5, 6]</span>
+<span class="sd">    &gt;&gt;&gt; listy = [2, 3, 4, 5, 6, 7]</span>
+<span class="sd">    &gt;&gt;&gt; a = 3.14</span>
+<span class="sd">    &gt;&gt;&gt; b = 42</span>
+<span class="sd">    &gt;&gt;&gt; listz1 = []</span>
+<span class="sd">    &gt;&gt;&gt; for x in listx:</span>
+<span class="sd">    &gt;&gt;&gt;     for y in listy:</span>
+<span class="sd">    &gt;&gt;&gt;         listz1.append(myfunction(x, y, a, b))</span>
+<span class="sd">In parallel:</span>
+<span class="sd">    &gt;&gt;&gt; from itertools import product</span>
+<span class="sd">    &gt;&gt;&gt; listz2 = parmap.starmap(myfunction, product(listx, listy), a, b)</span>
+<span class="sd">Check both results:</span>
+<span class="sd">    &gt;&gt;&gt; assert listz1 == listz2</span>
+
+<span class="sd">========</span>
+<span class="sd">Members</span>
+<span class="sd">========</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="c1"># The original idea for this implementation was given by J.F. Sebastian</span>
+<span class="c1"># at  http://stackoverflow.com/a/5443941/446149</span>
+
+<span class="kn">import</span> <span class="nn">multiprocessing</span>
+<span class="kn">import</span> <span class="nn">warnings</span>
+<span class="kn">import</span> <span class="nn">typing</span> <span class="k">as</span> <span class="nn">T</span>
+
+<span class="kn">from</span> <span class="nn">itertools</span> <span class="kn">import</span> <span class="n">repeat</span>
+<span class="kn">from</span> <span class="nn">multiprocessing.pool</span> <span class="kn">import</span> <span class="n">AsyncResult</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="kn">import</span> <span class="nn">tqdm.auto</span> <span class="k">as</span> <span class="nn">tqdm</span> <span class="c1"># type: ignore</span>
+    <span class="n">HAVE_TQDM</span> <span class="o">=</span> <span class="kc">True</span>
+<span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
+    <span class="n">HAVE_TQDM</span> <span class="o">=</span> <span class="kc">False</span>
+
+
+<span class="k">def</span> <span class="nf">_func_star_single</span><span class="p">(</span><span class="n">func_item_args</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Equivalent to:</span>
+<span class="sd">       func = func_item_args[0]</span>
+<span class="sd">       item = func_item_args[1]</span>
+<span class="sd">       args = func_item_args[2]</span>
+<span class="sd">       kwargs = func_item_args[3]</span>
+<span class="sd">       return func(item,args[0],args[1],..., **kwargs)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">func_item_args</span><span class="p">[</span><span class="mi">0</span><span class="p">](</span><span class="o">*</span><span class="p">[</span><span class="n">func_item_args</span><span class="p">[</span><span class="mi">1</span><span class="p">]]</span> <span class="o">+</span> <span class="n">func_item_args</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span>
+                             <span class="o">**</span><span class="n">func_item_args</span><span class="p">[</span><span class="mi">3</span><span class="p">])</span>
+
+
+<span class="k">def</span> <span class="nf">_func_star_many</span><span class="p">(</span><span class="n">func_items_args</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Equivalent to:</span>
+<span class="sd">       func = func_item_args[0]</span>
+<span class="sd">       items = func_item_args[1]</span>
+<span class="sd">       args = func_item_args[2:]</span>
+<span class="sd">       kwargs = func_item_args[3]</span>
+<span class="sd">       return func(items[0], items[1], ..., args[0], args[1], ..., **kwargs)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">func_items_args</span><span class="p">[</span><span class="mi">0</span><span class="p">](</span><span class="o">*</span><span class="nb">list</span><span class="p">(</span><span class="n">func_items_args</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span> <span class="o">+</span> <span class="n">func_items_args</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span>
+                              <span class="o">**</span><span class="n">func_items_args</span><span class="p">[</span><span class="mi">3</span><span class="p">])</span>
+
+
+<span class="k">def</span> <span class="nf">_create_pool</span><span class="p">(</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="n">parallel</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">&quot;pm_parallel&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
+    <span class="n">pool</span><span class="p">:</span> <span class="n">T</span><span class="o">.</span><span class="n">Optional</span><span class="p">[</span><span class="n">multiprocessing</span><span class="o">.</span><span class="n">Pool</span><span class="p">]</span> <span class="o">=</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">&quot;pm_pool&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="n">close_pool</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">processes</span><span class="p">:</span> <span class="n">T</span><span class="o">.</span><span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">&quot;pm_processes&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="c1"># Initialize pool if parallel:</span>
+    <span class="k">if</span> <span class="n">parallel</span> <span class="ow">and</span> <span class="n">pool</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">pool</span> <span class="o">=</span> <span class="n">multiprocessing</span><span class="o">.</span><span class="n">Pool</span><span class="p">(</span><span class="n">processes</span><span class="o">=</span><span class="n">processes</span><span class="p">)</span>
+            <span class="n">close_pool</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>  <span class="c1"># Disable parallel on error:</span>
+            <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">exc</span><span class="p">))</span>
+            <span class="n">parallel</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="k">return</span> <span class="n">parallel</span><span class="p">,</span> <span class="n">pool</span><span class="p">,</span> <span class="n">close_pool</span>
+
+
+<span class="k">def</span> <span class="nf">_do_pbar</span><span class="p">(</span><span class="n">async_result</span><span class="p">,</span> <span class="n">num_tasks</span><span class="p">,</span> <span class="n">chunksize</span><span class="p">,</span> <span class="n">refresh_time</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">tqdm_options</span><span class="o">=</span><span class="p">{}):</span>
+    <span class="n">remaining</span> <span class="o">=</span> <span class="n">num_tasks</span>
+    <span class="c1"># tqdm provides a progress bar.</span>
+    <span class="c1"># the pbar needs to be updated with the increment on each</span>
+    <span class="c1"># iteration.</span>
+    <span class="k">with</span> <span class="n">tqdm</span><span class="o">.</span><span class="n">tqdm</span><span class="p">(</span><span class="n">total</span><span class="o">=</span><span class="n">num_tasks</span><span class="p">,</span> <span class="o">**</span><span class="n">tqdm_options</span><span class="p">)</span> <span class="k">as</span> <span class="n">pbar</span><span class="p">:</span>
+        <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">async_result</span><span class="o">.</span><span class="n">ready</span><span class="p">():</span>
+                <span class="n">pbar</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">remaining</span><span class="p">)</span>
+                <span class="k">break</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">remaining_now</span> <span class="o">=</span> <span class="n">async_result</span><span class="o">.</span><span class="n">_number_left</span><span class="o">*</span><span class="n">chunksize</span>
+                <span class="n">done_now</span> <span class="o">=</span> <span class="n">remaining</span> <span class="o">-</span> <span class="n">remaining_now</span>
+                <span class="n">remaining</span> <span class="o">=</span> <span class="n">remaining_now</span>
+            <span class="k">except</span><span class="p">:</span>
+                <span class="k">break</span>
+            <span class="k">if</span> <span class="n">done_now</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">pbar</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">done_now</span><span class="p">)</span>
+            <span class="n">async_result</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">refresh_time</span><span class="p">)</span>  <span class="c1"># update every two seconds</span>
+
+
+<span class="k">def</span> <span class="nf">_get_default_chunksize</span><span class="p">(</span><span class="n">chunksize</span><span class="p">,</span> <span class="n">pool</span><span class="p">,</span> <span class="n">num_tasks</span><span class="p">):</span>
+    <span class="c1"># default from multiprocessing</span>
+    <span class="c1"># https://github.com/python/cpython/blob/master/Lib/multiprocessing/pool.py</span>
+    <span class="k">if</span> <span class="n">chunksize</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">chunksize</span><span class="p">,</span> <span class="n">extra</span> <span class="o">=</span> <span class="nb">divmod</span><span class="p">(</span><span class="n">num_tasks</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">pool</span><span class="o">.</span><span class="n">_pool</span><span class="p">)</span> <span class="o">*</span> <span class="mi">4</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">extra</span><span class="p">:</span>
+            <span class="n">chunksize</span> <span class="o">+=</span> <span class="mi">1</span>
+    <span class="k">return</span> <span class="n">chunksize</span>
+
+
+<span class="k">def</span> <span class="nf">_serial_map_or_starmap</span><span class="p">(</span><span class="n">function</span><span class="p">,</span> <span class="n">iterable</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">kwargs</span><span class="p">,</span> <span class="n">progress</span><span class="p">,</span>
+                           <span class="n">map_or_starmap</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">progress</span> <span class="ow">or</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">progress</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+        <span class="n">tqdm_options</span> <span class="o">=</span> <span class="n">progress</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">progress</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="k">else</span> <span class="p">{}</span>
+        <span class="n">iterable</span> <span class="o">=</span> <span class="n">tqdm</span><span class="o">.</span><span class="n">tqdm</span><span class="p">(</span><span class="n">iterable</span><span class="p">,</span> <span class="o">**</span><span class="n">tqdm_options</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">map_or_starmap</span> <span class="o">==</span> <span class="s2">&quot;map&quot;</span><span class="p">:</span>
+        <span class="n">output</span> <span class="o">=</span> <span class="p">[</span><span class="n">function</span><span class="p">(</span><span class="o">*</span><span class="p">([</span><span class="n">item</span><span class="p">]</span> <span class="o">+</span> <span class="nb">list</span><span class="p">(</span><span class="n">args</span><span class="p">)),</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+                  <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">iterable</span><span class="p">]</span>
+    <span class="k">elif</span> <span class="n">map_or_starmap</span> <span class="o">==</span> <span class="s2">&quot;starmap&quot;</span><span class="p">:</span>
+        <span class="n">output</span> <span class="o">=</span> <span class="p">[</span><span class="n">function</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">item</span><span class="p">)</span> <span class="o">+</span> <span class="nb">list</span><span class="p">(</span><span class="n">args</span><span class="p">)),</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+                  <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">iterable</span><span class="p">]</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">AssertionError</span><span class="p">(</span><span class="s2">&quot;Internal parmap error: Invalid map_or_starmap.&quot;</span> <span class="o">+</span>
+                             <span class="s2">&quot; This should not happen&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">output</span>
+
+
+<span class="k">def</span> <span class="nf">_get_helper_func</span><span class="p">(</span><span class="n">map_or_starmap</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">map_or_starmap</span> <span class="o">==</span> <span class="s2">&quot;map&quot;</span><span class="p">:</span>
+        <span class="n">func_star</span> <span class="o">=</span> <span class="n">_func_star_single</span>
+    <span class="k">elif</span> <span class="n">map_or_starmap</span> <span class="o">==</span> <span class="s2">&quot;starmap&quot;</span><span class="p">:</span>
+        <span class="n">func_star</span> <span class="o">=</span> <span class="n">_func_star_many</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">AssertionError</span><span class="p">(</span><span class="s2">&quot;Internal parmap error: Invalid map_or_starmap.&quot;</span> <span class="o">+</span>
+                             <span class="s2">&quot; This should not happen&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">func_star</span>
+
+
+<span class="k">def</span> <span class="nf">_deprecated_kwargs</span><span class="p">(</span><span class="n">kwargs</span><span class="p">,</span> <span class="n">arg_newarg</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot; arg_newarg is a list of tuples, where each tuple has a pair of strings.</span>
+<span class="sd">        (&#39;old_arg&#39;, &#39;new_arg&#39;)</span>
+<span class="sd">        A DeprecationWarning is raised for the arguments that need to be</span>
+<span class="sd">        replaced.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">warn_for</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="p">(</span><span class="n">arg</span><span class="p">,</span> <span class="n">new_kw</span><span class="p">)</span> <span class="ow">in</span> <span class="n">arg_newarg</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">arg</span> <span class="ow">in</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+            <span class="n">val</span> <span class="o">=</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">arg</span><span class="p">)</span>
+            <span class="n">kwargs</span><span class="p">[</span><span class="n">new_kw</span><span class="p">]</span> <span class="o">=</span> <span class="n">val</span>
+            <span class="n">warn_for</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">arg</span><span class="p">,</span> <span class="n">new_kw</span><span class="p">))</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">warn_for</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">warn_for</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="s2">&quot;Argument &#39;</span><span class="si">{}</span><span class="s2">&#39; is deprecated. Use </span><span class="si">{}</span><span class="s2"> instead&quot;</span><span class="o">.</span>
+                          <span class="nb">format</span><span class="p">(</span><span class="n">warn_for</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">],</span> <span class="n">warn_for</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">1</span><span class="p">]),</span>
+                          <span class="ne">DeprecationWarning</span><span class="p">,</span> <span class="n">stacklevel</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">args</span> <span class="o">=</span> <span class="s2">&quot;, &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">([</span><span class="n">x</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">warn_for</span><span class="p">])</span>
+            <span class="n">repl</span> <span class="o">=</span> <span class="s2">&quot;, &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">([</span><span class="n">x</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">warn_for</span><span class="p">])</span>
+            <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
+                <span class="s2">&quot;Arguments &#39;</span><span class="si">{}</span><span class="s2">&#39; are deprecated. Use &#39;</span><span class="si">{}</span><span class="s2">&#39; instead respectively&quot;</span><span class="o">.</span>
+                <span class="nb">format</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">repl</span><span class="p">),</span>
+                <span class="ne">DeprecationWarning</span><span class="p">,</span> <span class="n">stacklevel</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">kwargs</span>
+
+
+<span class="k">def</span> <span class="nf">_map_or_starmap</span><span class="p">(</span><span class="n">function</span><span class="p">,</span> <span class="n">iterable</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">kwargs</span><span class="p">,</span> <span class="n">map_or_starmap</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Shared function between parmap.map and parmap.starmap.</span>
+<span class="sd">    Refer to those functions for details.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">arg_newarg</span> <span class="o">=</span> <span class="p">((</span><span class="s2">&quot;parallel&quot;</span><span class="p">,</span> <span class="s2">&quot;pm_parallel&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;chunksize&quot;</span><span class="p">,</span> <span class="s2">&quot;pm_chunksize&quot;</span><span class="p">),</span>
+                  <span class="p">(</span><span class="s2">&quot;pool&quot;</span><span class="p">,</span> <span class="s2">&quot;pm_pool&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;processes&quot;</span><span class="p">,</span> <span class="s2">&quot;pm_processes&quot;</span><span class="p">),</span>
+                  <span class="p">(</span><span class="s2">&quot;parmap_progress&quot;</span><span class="p">,</span> <span class="s2">&quot;pm_pbar&quot;</span><span class="p">))</span>
+    <span class="n">kwargs</span> <span class="o">=</span> <span class="n">_deprecated_kwargs</span><span class="p">(</span><span class="n">kwargs</span><span class="p">,</span> <span class="n">arg_newarg</span><span class="p">)</span>
+    <span class="n">chunksize</span> <span class="o">=</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">&quot;pm_chunksize&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="n">progress</span> <span class="o">=</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">&quot;pm_pbar&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+    <span class="n">progress</span> <span class="o">=</span> <span class="n">progress</span> <span class="k">if</span> <span class="n">HAVE_TQDM</span> <span class="k">else</span> <span class="kc">False</span>
+    <span class="n">parallel</span><span class="p">,</span> <span class="n">pool</span><span class="p">,</span> <span class="n">close_pool</span> <span class="o">=</span> <span class="n">_create_pool</span><span class="p">(</span><span class="n">kwargs</span><span class="p">)</span>
+    <span class="c1"># Handle case: Execute sequentially:</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">parallel</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_serial_map_or_starmap</span><span class="p">(</span><span class="n">function</span><span class="p">,</span> <span class="n">iterable</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">kwargs</span><span class="p">,</span>
+                                      <span class="n">progress</span><span class="p">,</span> <span class="n">map_or_starmap</span><span class="p">)</span>
+    <span class="n">func_star</span> <span class="o">=</span> <span class="n">_get_helper_func</span><span class="p">(</span><span class="n">map_or_starmap</span><span class="p">)</span>
+    <span class="c1"># Handle case: Without showing progress bar</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">progress</span><span class="p">:</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">result</span> <span class="o">=</span> <span class="n">pool</span><span class="o">.</span><span class="n">map_async</span><span class="p">(</span><span class="n">func_star</span><span class="p">,</span>
+                                    <span class="nb">zip</span><span class="p">(</span><span class="n">repeat</span><span class="p">(</span><span class="n">function</span><span class="p">),</span>
+                                        <span class="n">iterable</span><span class="p">,</span>
+                                        <span class="n">repeat</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">args</span><span class="p">)),</span>
+                                        <span class="n">repeat</span><span class="p">(</span><span class="n">kwargs</span><span class="p">)),</span>
+                                    <span class="n">chunksize</span><span class="p">)</span>
+            <span class="n">output</span> <span class="o">=</span> <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">()</span>
+        <span class="k">except</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">close_pool</span><span class="p">:</span>
+                <span class="n">pool</span><span class="o">.</span><span class="n">terminate</span><span class="p">()</span>
+            <span class="k">raise</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">close_pool</span><span class="p">:</span>
+                <span class="n">pool</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+                <span class="n">pool</span><span class="o">.</span><span class="n">join</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">output</span>
+    <span class="c1"># Show progress bar:</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">num_tasks</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">iterable</span><span class="p">)</span>
+        <span class="c1"># get a chunksize (as multiprocessing does):</span>
+        <span class="n">chunksize</span> <span class="o">=</span> <span class="n">_get_default_chunksize</span><span class="p">(</span><span class="n">chunksize</span><span class="p">,</span>
+                                           <span class="n">pool</span><span class="p">,</span> <span class="n">num_tasks</span><span class="p">)</span>
+        <span class="c1"># use map_async to get progress information</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="n">pool</span><span class="o">.</span><span class="n">map_async</span><span class="p">(</span><span class="n">func_star</span><span class="p">,</span>
+                                <span class="nb">zip</span><span class="p">(</span><span class="n">repeat</span><span class="p">(</span><span class="n">function</span><span class="p">),</span>
+                                    <span class="n">iterable</span><span class="p">,</span>
+                                    <span class="n">repeat</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">args</span><span class="p">)),</span>
+                                    <span class="n">repeat</span><span class="p">(</span><span class="n">kwargs</span><span class="p">)),</span>
+                                <span class="n">chunksize</span><span class="p">)</span>
+    <span class="k">except</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">close_pool</span><span class="p">:</span>
+            <span class="n">pool</span><span class="o">.</span><span class="n">terminate</span><span class="p">()</span>
+        <span class="k">raise</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">close_pool</span><span class="p">:</span>
+            <span class="n">pool</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+    <span class="c1"># Progress bar:</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">tqdm_options</span> <span class="o">=</span> <span class="n">progress</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">progress</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="k">else</span> <span class="p">{}</span>
+        <span class="n">_do_pbar</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="n">num_tasks</span><span class="p">,</span> <span class="n">chunksize</span><span class="p">,</span> <span class="n">tqdm_options</span><span class="o">=</span><span class="n">tqdm_options</span><span class="p">)</span>
+    <span class="k">finally</span><span class="p">:</span>
+        <span class="n">output</span> <span class="o">=</span> <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">close_pool</span><span class="p">:</span>
+            <span class="n">pool</span><span class="o">.</span><span class="n">join</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">output</span>
+
+
+<div class="viewcode-block" id="map"><a class="viewcode-back" href="../../index.html#parmap.map">[docs]</a><span class="k">def</span> <span class="nf">map</span><span class="p">(</span><span class="n">function</span><span class="p">,</span> <span class="n">iterable</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;This function is equivalent to:</span>
+<span class="sd">        &gt;&gt;&gt; [function(x, args[0], args[1],...) for x in iterable]</span>
+
+<span class="sd">       :param pm_parallel: Force parallelization on/off</span>
+<span class="sd">       :type pm_parallel: bool</span>
+<span class="sd">       :param pm_chunksize: see  :py:class:`multiprocessing.pool.Pool`</span>
+<span class="sd">       :type pm_chunksize: int</span>
+<span class="sd">       :param pm_pool: Pass an existing pool</span>
+<span class="sd">       :type pm_pool: multiprocessing.pool.Pool</span>
+<span class="sd">       :param pm_processes: Number of processes to use in the pool. See</span>
+<span class="sd">         :py:class:`multiprocessing.pool.Pool`</span>
+<span class="sd">       :type pm_processes: int</span>
+<span class="sd">       :param pm_pbar: Show progress bar with optional information.</span>
+
+<span class="sd">            * If it is a `boolean`, whether to show or not the progress bar.</span>
+<span class="sd">            * If it is a `dictionary`, these are options passed to `tqdm.tqdm()`.</span>
+<span class="sd">            * If it is a `callable`, the callable is a function compatible with `tqdm.tqdm()`.</span>
+<span class="sd">              If you want to pass additional options to your callable, consider using :py:func:`functools.partial`::</span>
+
+<span class="sd">                from functools import partial</span>
+<span class="sd">                import tqdm</span>
+<span class="sd">                tqdm_options = {&quot;desc&quot;: &quot;example&quot;}</span>
+<span class="sd">                pm_pbar = partial(tqdm.tqdm, tqdm_options)</span>
+<span class="sd">            </span>
+<span class="sd">       :type pm_pbar: bool, dict or callable</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">_map_or_starmap</span><span class="p">(</span><span class="n">function</span><span class="p">,</span> <span class="n">iterable</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">kwargs</span><span class="p">,</span> <span class="s2">&quot;map&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="starmap"><a class="viewcode-back" href="../../index.html#parmap.starmap">[docs]</a><span class="k">def</span> <span class="nf">starmap</span><span class="p">(</span><span class="n">function</span><span class="p">,</span> <span class="n">iterables</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot; Equivalent to:</span>
+<span class="sd">            &gt;&gt;&gt; return ([function(x1,x2,x3,..., args[0], args[1],...) for</span>
+<span class="sd">            &gt;&gt;&gt;         (x1,x2,x3...) in iterable])</span>
+
+<span class="sd">       :param pm_parallel: Force parallelization on/off</span>
+<span class="sd">       :type pm_parallel: bool</span>
+<span class="sd">       :param pm_chunksize: see  :py:class:`multiprocessing.pool.Pool`</span>
+<span class="sd">       :type pm_chunksize: int</span>
+<span class="sd">       :param pm_pool: Pass an existing pool</span>
+<span class="sd">       :type pm_pool: multiprocessing.pool.Pool</span>
+<span class="sd">       :param pm_processes: Number of processes to use in the pool. See</span>
+<span class="sd">                         :py:class:`multiprocessing.pool.Pool`</span>
+<span class="sd">       :type pm_processes: int</span>
+<span class="sd">       :param pm_pbar: Show progress bar with optional information. If it</span>
+<span class="sd">         is a dictionary, these are options passed to tqdm.</span>
+<span class="sd">       :type pm_pbar: bool or dict</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">_map_or_starmap</span><span class="p">(</span><span class="n">function</span><span class="p">,</span> <span class="n">iterables</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">kwargs</span><span class="p">,</span> <span class="s2">&quot;starmap&quot;</span><span class="p">)</span></div>
+
+
+<span class="k">class</span> <span class="nc">_DummyAsyncResult</span><span class="p">(</span><span class="n">AsyncResult</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot; AsyncResult compatible class, for when parallelization is disabled</span>
+<span class="sd">        It is a dummy class.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">values</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_values</span> <span class="o">=</span> <span class="n">values</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">_number_left</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="mi">0</span>
+
+    <span class="k">def</span> <span class="nf">get</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_values</span>
+
+    <span class="k">def</span> <span class="nf">wait</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">pass</span>
+
+    <span class="k">def</span> <span class="nf">ready</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="kc">True</span>
+
+    <span class="k">def</span> <span class="nf">successful</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># The exception would have been raised in the computation of result</span>
+        <span class="k">return</span> <span class="kc">True</span>
+
+    <span class="k">def</span> <span class="fm">__enter__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+    <span class="k">def</span> <span class="fm">__exit__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">type</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">traceback</span><span class="p">):</span>
+        <span class="k">pass</span>
+
+<span class="k">class</span> <span class="nc">_ParallelAsyncResult</span><span class="p">(</span><span class="n">AsyncResult</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot; Like the AsyncResult, but it will close the pool when we leave the</span>
+<span class="sd">        ``with`` block or when we check if it is ready.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">result</span><span class="p">,</span> <span class="n">pool</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_result</span> <span class="o">=</span> <span class="n">result</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_pool</span> <span class="o">=</span> <span class="n">pool</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">_number_left</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_result</span><span class="o">.</span><span class="n">_number_left</span>
+
+    <span class="k">def</span> <span class="nf">get</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">values</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">timeout</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">ready</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">join</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">values</span>
+
+    <span class="k">def</span> <span class="nf">wait</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_result</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">timeout</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">ready</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">is_ready</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_result</span><span class="o">.</span><span class="n">ready</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">is_ready</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">join</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">is_ready</span>
+
+    <span class="k">def</span> <span class="nf">successful</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_result</span><span class="o">.</span><span class="n">successful</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="fm">__enter__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+    <span class="k">def</span> <span class="nf">join</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_pool</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_pool</span><span class="o">.</span><span class="n">join</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_pool</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="k">def</span> <span class="nf">terminate</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_pool</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_pool</span><span class="o">.</span><span class="n">terminate</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_pool</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="k">def</span> <span class="fm">__exit__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">type</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">traceback</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">terminate</span><span class="p">()</span>
+
+
+<span class="k">def</span> <span class="nf">_map_or_starmap_async</span><span class="p">(</span><span class="n">function</span><span class="p">,</span> <span class="n">iterable</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">kwargs</span><span class="p">,</span> <span class="n">map_or_starmap</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Shared function between parmap.map_async and parmap.starmap_async.</span>
+<span class="sd">    Refer to those functions for details.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">arg_newarg</span> <span class="o">=</span> <span class="p">((</span><span class="s2">&quot;parallel&quot;</span><span class="p">,</span> <span class="s2">&quot;pm_parallel&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;chunksize&quot;</span><span class="p">,</span> <span class="s2">&quot;pm_chunksize&quot;</span><span class="p">),</span>
+                  <span class="p">(</span><span class="s2">&quot;pool&quot;</span><span class="p">,</span> <span class="s2">&quot;pm_pool&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;processes&quot;</span><span class="p">,</span> <span class="s2">&quot;pm_processes&quot;</span><span class="p">),</span>
+                  <span class="p">(</span><span class="s2">&quot;callback&quot;</span><span class="p">,</span> <span class="s2">&quot;pm_callback&quot;</span><span class="p">),</span>
+                  <span class="p">(</span><span class="s2">&quot;error_callback&quot;</span><span class="p">,</span> <span class="s2">&quot;pm_error_callback&quot;</span><span class="p">))</span>
+    <span class="n">kwargs</span> <span class="o">=</span> <span class="n">_deprecated_kwargs</span><span class="p">(</span><span class="n">kwargs</span><span class="p">,</span> <span class="n">arg_newarg</span><span class="p">)</span>
+    <span class="n">chunksize</span> <span class="o">=</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">&quot;pm_chunksize&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="n">callback</span> <span class="o">=</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">&quot;pm_callback&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="n">error_callback</span> <span class="o">=</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">&quot;pm_error_callback&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="n">parallel</span><span class="p">,</span> <span class="n">pool</span><span class="p">,</span> <span class="n">close_pool</span> <span class="o">=</span> <span class="n">_create_pool</span><span class="p">(</span><span class="n">kwargs</span><span class="p">)</span>
+    <span class="c1"># Map:</span>
+    <span class="k">if</span> <span class="n">parallel</span><span class="p">:</span>
+        <span class="n">func_star</span> <span class="o">=</span> <span class="n">_get_helper_func</span><span class="p">(</span><span class="n">map_or_starmap</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">result</span> <span class="o">=</span> <span class="n">pool</span><span class="o">.</span><span class="n">map_async</span><span class="p">(</span>
+                <span class="n">func_star</span><span class="p">,</span>
+                <span class="nb">zip</span><span class="p">(</span><span class="n">repeat</span><span class="p">(</span><span class="n">function</span><span class="p">),</span>
+                    <span class="n">iterable</span><span class="p">,</span>
+                    <span class="n">repeat</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">args</span><span class="p">)),</span>
+                    <span class="n">repeat</span><span class="p">(</span><span class="n">kwargs</span><span class="p">)</span>
+                <span class="p">),</span>
+                <span class="n">chunksize</span> <span class="o">=</span> <span class="n">chunksize</span><span class="p">,</span>
+                <span class="n">callback</span> <span class="o">=</span> <span class="n">callback</span><span class="p">,</span>
+                <span class="n">error_callback</span> <span class="o">=</span> <span class="n">error_callback</span>
+            <span class="p">)</span>
+        <span class="k">except</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">close_pool</span><span class="p">:</span>
+                <span class="n">pool</span><span class="o">.</span><span class="n">terminate</span><span class="p">()</span>
+            <span class="k">raise</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">close_pool</span><span class="p">:</span>
+                <span class="n">pool</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+                <span class="n">result</span> <span class="o">=</span> <span class="n">_ParallelAsyncResult</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="n">pool</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">result</span> <span class="o">=</span> <span class="n">_ParallelAsyncResult</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">values</span> <span class="o">=</span> <span class="n">_serial_map_or_starmap</span><span class="p">(</span><span class="n">function</span><span class="p">,</span> <span class="n">iterable</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">kwargs</span><span class="p">,</span>
+                                        <span class="kc">False</span><span class="p">,</span> <span class="n">map_or_starmap</span><span class="p">)</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="n">_DummyAsyncResult</span><span class="p">(</span><span class="n">values</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">result</span>
+
+
+<div class="viewcode-block" id="map_async"><a class="viewcode-back" href="../../index.html#parmap.map_async">[docs]</a><span class="k">def</span> <span class="nf">map_async</span><span class="p">(</span><span class="n">function</span><span class="p">,</span> <span class="n">iterable</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;This function is the multiprocessing.Pool.map_async version that</span>
+<span class="sd">       supports multiple arguments.</span>
+
+<span class="sd">        &gt;&gt;&gt; [function(x, args[0], args[1],...) for x in iterable]</span>
+
+<span class="sd">       :param pm_parallel: Force parallelization on/off. If False, the</span>
+<span class="sd">                           function won&#39;t be asynchronous.</span>
+<span class="sd">       :type pm_parallel: bool</span>
+<span class="sd">       :param pm_chunksize: see  :py:class:`multiprocessing.pool.Pool`</span>
+<span class="sd">       :type pm_chunksize: int</span>
+<span class="sd">       :param pm_callback: see  :py:class:`multiprocessing.pool.Pool`</span>
+<span class="sd">       :type pm_callback: function</span>
+<span class="sd">       :param pm_error_callback: (not on python 2) see</span>
+<span class="sd">           :py:class:`multiprocessing.pool.Pool`</span>
+<span class="sd">       :type pm_error_callback: function</span>
+<span class="sd">       :param pm_pool: Pass an existing pool.</span>
+<span class="sd">       :type pm_pool: multiprocessing.pool.Pool</span>
+<span class="sd">       :param pm_processes: Number of processes to use in the pool. See</span>
+<span class="sd">         :py:class:`multiprocessing.pool.Pool`</span>
+<span class="sd">       :type pm_processes: int</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">_map_or_starmap_async</span><span class="p">(</span><span class="n">function</span><span class="p">,</span> <span class="n">iterable</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">kwargs</span><span class="p">,</span> <span class="s2">&quot;map&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="starmap_async"><a class="viewcode-back" href="../../index.html#parmap.starmap_async">[docs]</a><span class="k">def</span> <span class="nf">starmap_async</span><span class="p">(</span><span class="n">function</span><span class="p">,</span> <span class="n">iterables</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;This function is the multiprocessing.Pool.starmap_async version that</span>
+<span class="sd">       supports multiple arguments.</span>
+
+<span class="sd">            &gt;&gt;&gt; return ([function(x1,x2,x3,..., args[0], args[1],...) for</span>
+<span class="sd">            &gt;&gt;&gt;         (x1,x2,x3...) in iterable])</span>
+
+<span class="sd">       :param pm_parallel: Force parallelization on/off. If False, the</span>
+<span class="sd">                           function won&#39;t be asynchronous.</span>
+<span class="sd">       :type pm_parallel: bool</span>
+<span class="sd">       :param pm_chunksize: see  :py:class:`multiprocessing.pool.Pool`</span>
+<span class="sd">       :type pm_chunksize: int</span>
+<span class="sd">       :param pm_callback: see  :py:class:`multiprocessing.pool.Pool`</span>
+<span class="sd">       :type pm_callback: function</span>
+<span class="sd">       :param pm_error_callback: see  :py:class:`multiprocessing.pool.Pool`</span>
+<span class="sd">       :type pm_error_callback: function</span>
+<span class="sd">       :param pm_pool: Pass an existing pool.</span>
+<span class="sd">       :type pm_pool: multiprocessing.pool.Pool</span>
+<span class="sd">       :param pm_processes: Number of processes to use in the pool. See</span>
+<span class="sd">         :py:class:`multiprocessing.pool.Pool`</span>
+<span class="sd">       :type pm_processes: int</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">_map_or_starmap_async</span><span class="p">(</span><span class="n">function</span><span class="p">,</span> <span class="n">iterables</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">kwargs</span><span class="p">,</span> <span class="s2">&quot;starmap&quot;</span><span class="p">)</span></div>
+
+
+<span class="c1"># Needs testing, but it might work as it is:</span>
+
+<span class="c1"># def _serial_imap_or_istarmap(function, iterable, args,</span>
+<span class="c1">#                              kwargs, map_or_starmap):</span>
+<span class="c1">#    if map_or_starmap == &quot;map&quot;:</span>
+<span class="c1">#        output = (function(*([item] + list(args)), **kwargs)</span>
+<span class="c1">#                  for item in iterable)</span>
+<span class="c1">#    elif map_or_starmap == &quot;starmap&quot;:</span>
+<span class="c1">#        output = (function(*(list(item) + list(args)), **kwargs)</span>
+<span class="c1">#                  for item in iterable)</span>
+<span class="c1">#    else:</span>
+<span class="c1">#        raise AssertionError(&quot;Internal parmap error: &quot; +</span>
+<span class="c1">#                             &quot;Invalid map_or_starmap. This should not happen&quot;)</span>
+<span class="c1">#    return output</span>
+
+
+<span class="c1"># def imap(function, iterable, *args, **kwargs):</span>
+<span class="c1">#    chunksize = kwargs.pop(&quot;pm_chunksize&quot;, 1)</span>
+<span class="c1">#    parallel, pool, close_pool = _create_pool(kwargs)</span>
+<span class="c1">#    # Map:</span>
+<span class="c1">#    if parallel:</span>
+<span class="c1">#        func_star = _get_helper_func(&quot;map&quot;)</span>
+<span class="c1">#        try:</span>
+<span class="c1">#            output = pool.imap(func_star,</span>
+<span class="c1">#                               zip(repeat(function), iterable,</span>
+<span class="c1">#                                   repeat(list(args)), repeat(kwargs)),</span>
+<span class="c1">#                               chunksize)</span>
+<span class="c1">#        finally:</span>
+<span class="c1">#            if close_pool:</span>
+<span class="c1">#                pool.close()</span>
+<span class="c1">#                pool.join()</span>
+<span class="c1">#    else:</span>
+<span class="c1">#        output = _serial_imap_or_istarmap(function, iterable, args, kwargs,</span>
+<span class="c1">#                                          map_or_starmap)</span>
+<span class="c1">#    return output</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">parmap</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2017-2023, Sergio Oller.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 4.3.2</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>
