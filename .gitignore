@@ -1,5 +1,6 @@
 # Access to dataset
-data/HAD.csv
+data/*
+results/*
 
 # Virtual environment
 .venv/
