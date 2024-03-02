@@ -45,6 +45,13 @@ Utilize patient information datasets like AmsterdamUMCdb, HIRID, eICU, MIMIC, an
 - Contribution to robust methods for handling missing data in high-stakes healthcare scenarios.
 - Practical application insights of generative models in precision medicine.
 
+### Getting Started
+
+To get started with the project, follow these steps:
+
+1. Clone this repository to your local machine.
+2. Before running the code, pleases init and update necessary submodules by running `git submodule init` and `git submodule update` in terminal.
+
 ---
 
 **References:**
