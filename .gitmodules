@@ -1,0 +1,3 @@
+[submodule "ConditionalGMM"]
+	path = ConditionalGMM
+	url = https://github.com/tmcclintock/ConditionalGMM.git
