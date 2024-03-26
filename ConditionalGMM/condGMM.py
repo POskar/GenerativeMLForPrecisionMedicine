@@ -277,8 +277,8 @@ class CondGMM(object):
 
                 if rvs_i.shape[0] < rvs.shape[0]:
                     missing_samples = rvs.shape[0] - rvs_i.shape[0]
-                    zero_padding = np.zeros((missing_samples, rvs_i.shape[1]))
-                    rvs_i_copy = np.vstack([rvs_i, zero_padding])
+                    nan_padding = np.full((missing_samples, rvs_i.shape[1]), np.nan)
+                    rvs_i_copy = np.vstack([rvs_i, nan_padding])
                 elif rvs_i.shape[0] > rvs.shape[0]:
                     rvs_i_copy = rvs_i[:rvs.shape[0], :]
                 else:
