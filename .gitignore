@@ -7,3 +7,6 @@ results/*
 
 # Cache
 **/__pycache__/
+
+# Python Scripts
+**.py
