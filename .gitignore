@@ -1,6 +1,7 @@
 # Access to dataset
 data/*
-results/*
+results/with_missingness/*
+results/without_missingness/*
 
 # Virtual environment
 .venv/
