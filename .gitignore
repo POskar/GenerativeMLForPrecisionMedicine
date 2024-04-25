@@ -6,3 +6,6 @@ data/*
 
 # Cache
 **/__pycache__/
+
+# Python scripts
+**.py
