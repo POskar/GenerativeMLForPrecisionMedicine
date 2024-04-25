@@ -1,13 +1,8 @@
 # Access to dataset
 data/*
-results/with_missingness/*
-results/without_missingness/*
 
 # Virtual environment
 .venv/
 
 # Cache
 **/__pycache__/
-
-# Python Scripts
-**.py
