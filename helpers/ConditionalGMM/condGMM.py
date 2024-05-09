@@ -19,7 +19,8 @@ class CondGMM(object):
             default is `None`
 
     """
-    def __init__(self, weights, means, covs, fixed_indices, fixed_components = None):
+    def __init__(self, weights, means, covs,
+                 fixed_indices, fixed_components = None):
         assert isinstance(weights, (list, np.ndarray))
         assert isinstance(means, (list, np.ndarray))
         assert isinstance(covs, (list, np.ndarray))
@@ -27,7 +28,7 @@ class CondGMM(object):
         weights = np.asarray(weights)
         means = np.asarray(means)
         covs = np.asarray(covs)
-        fixed_indices = np.asarray(fixed_indices)
+        fixed_indices = np.asarray(fixed_indices, dtype=int)
         assert weights.ndim == 1
         assert means.ndim == 2
         assert covs.ndim == 3
@@ -98,9 +99,9 @@ class CondGMM(object):
         dists = self.conditionalMVNs
         mus = np.array([d._mu_2() for d in dists])
         covs = np.array([d._Sigma_22() for d in dists])
-        
-        probs = w*np.array([sp.stats.multivariate_normal.pdf(x2, mean=mus[i], cov=covs[i], allow_singular=True) for i in range(len(w))])
-        
+
+        probs = w*np.array([sp.stats.multivariate_normal.pdf(x2, mean=mus[i], cov=covs[i])
+                                       for i in range(len(w))])
         if component_probs:
             return probs
         else:
@@ -268,27 +269,18 @@ class CondGMM(object):
             n = len(components[components == i])
             if n == 0: #Skip if no draws
                 continue
+            
             rvs_i = np.atleast_2d(dists[i].rvs(x2 = x2, size = n))
             
-            if rvs.shape == rvs_i.shape:
-                rvs[i == components] = rvs_i
-            elif rvs_i.shape[0] == 1:
-                rvs_i = rvs_i.reshape(-1, 1)
-
-                if rvs_i.shape[0] < rvs.shape[0]:
-                    missing_samples = rvs.shape[0] - rvs_i.shape[0]
-                    nan_padding = np.full((missing_samples, rvs_i.shape[1]), np.NaN)
-                    rvs_i_copy = np.vstack([rvs_i, nan_padding])
-                elif rvs_i.shape[0] > rvs.shape[0]:
-                    rvs_i_copy = rvs_i[:rvs.shape[0], :]
-                else:
-                    rvs[i == components] = rvs_i
-                    continue
+            #QUICK FIX
+            if rvs_i.shape[1] != self.x1_ndim:
+                rvs_i = rvs_i.T
                 
-                for index, component in enumerate(components):
-                    if i == component:
-                        rvs[index] = rvs_i_copy[index]
-
+            # try:
+            rvs[i == components] = rvs_i
+            # except Exception as e:
+            #     print(e)
+            
         if component_labels:
             return rvs, components
         else:
