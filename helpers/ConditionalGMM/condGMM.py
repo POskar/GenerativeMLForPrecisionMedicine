@@ -260,7 +260,12 @@ class CondGMM(object):
         #Choose which components the data come from
         c_weights = self.conditional_weights(x2)
         inds = np.arange(len(c_weights))
-        components = np.random.choice(inds, size = size, p = c_weights)
+        
+        # TODO: c_weights contain NaN, handle it
+        try:
+            components = np.random.choice(inds, size = size, p = c_weights)
+        except Exception as e:
+            return rvs
         #_, counts = np.unique(components, return_counts = True)
 
         #Get RVs from each component
@@ -276,10 +281,7 @@ class CondGMM(object):
             if rvs_i.shape[1] != self.x1_ndim:
                 rvs_i = rvs_i.T
                 
-            # try:
             rvs[i == components] = rvs_i
-            # except Exception as e:
-            #     print(e)
             
         if component_labels:
             return rvs, components
